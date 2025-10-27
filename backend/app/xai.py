@@ -45,49 +45,53 @@ def create_heatmap_overlay(mel_spectrogram, heatmap):
     mel spectrogram and returns a base64 encoded image.
     """
     
-    # Upscale the 12x12 heatmap to match the spectrogram dimensions (128, 1024)
-    # The AST model processes audio in 10.24s chunks (1024 frames)
-    # We need to make sure our spectrogram matches this
-    
-    # Fix the time dimension for plotting
-    # AST pads/truncates to 1024 frames (10.24s * 100 frames/s)
-    # The mel spectrogram from the processor is (128, 1024)
-    
     # Ensure mel_spectrogram is on CPU and is a numpy array
     if isinstance(mel_spectrogram, torch.Tensor):
         mel_spectrogram = mel_spectrogram.squeeze().cpu().numpy()
         
-    # Resize spectrogram if it's not 1024 frames long
-    if mel_spectrogram.shape[1] != 1024:
-        # Simple padding/truncating for visualization
-        if mel_spectrogram.shape[1] > 1024:
-            mel_spectrogram = mel_spectrogram[:, :1024]
-        else:
-            pad_width = 1024 - mel_spectrogram.shape[1]
-            mel_spectrogram = np.pad(mel_spectrogram, ((0,0), (0, pad_width)), mode='constant')
-            
-    # Upscale heatmap (12x12) to match spectrogram (128x1024)
-    # Note: AST patches are 16x16. 128/16 = 8. 1024/16 = 64.
-    # The model *actually* uses 128 bins and 1024 frames.
-    # The 12x12 patches come from a different calc.
-    # Let's just resize the 12x12 to match the spec dimensions for a smooth viz.
-    zoom_factors = (128 / 12, 1024 / 12)
-    upscaled_heatmap = zoom(heatmap, zoom_factors, order=1) # order=1 is bilinear interp
+    spec_height, spec_width = mel_spectrogram.shape
+    
+    # Upscale heatmap (12x12) to match spectrogram
+    zoom_factors = (spec_height / 12, spec_width / 12)
+    upscaled_heatmap = zoom(heatmap, zoom_factors, order=1) 
 
+    # Normalize the heatmap for better visualization
+    # This scales all values to be between 0 and 1
+    normalized_heatmap = (upscaled_heatmap - np.min(upscaled_heatmap)) / (np.max(upscaled_heatmap) - np.min(upscaled_heatmap))
+    
     # Plotting
     fig, ax = plt.subplots(figsize=(10, 4))
     
     # Plot the Mel Spectrogram
-    librosa.display.specshow(mel_spectrogram, sr=16000, hop_length=160, x_axis='time', y_axis='mel', ax=ax)
+    S_db = librosa.power_to_db(mel_spectrogram, ref=np.max)
+    spec_img = librosa.display.specshow(S_db, sr=16000, hop_length=160, x_axis='time', y_axis='mel', ax=ax)
     
-    # Overlay the heatmap
-    ax.imshow(upscaled_heatmap, cmap='jet', alpha=0.4, aspect='auto', extent=[0, 10.24, 0, 8000])
+    # Get the coordinate extent from the axes *after* plotting the specshow
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    # Create the extent list in the correct order [left, right, bottom, top]
+    im_extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
     
+    # Use a more intuitive 'hot' colormap
+    # Use the normalized_heatmap**2 as the alpha channel.
+    # This makes low-attention areas (e.g., 0.1) almost fully transparent (alpha=0.01)
+    # and high-attention areas (e.g., 0.9) mostly opaque (alpha=0.81)
+    ax.imshow(
+        normalized_heatmap, 
+        cmap='hot', 
+        alpha=normalized_heatmap**2,  # This is the key change
+        aspect='auto', 
+        extent=im_extent, 
+        origin='lower'
+    )
+
+    # Add a color bar to show frequency mapping
+    fig.colorbar(spec_img, ax=ax, format="%+2.0f dB")
     ax.set_title(f"XAI Attention Heatmap for Audio Event")
     fig.tight_layout()
     
     # Save to a bytes buffer
-    buf = io.BytesIO()
+    buf = io.BytesB()
     fig.savefig(buf, format='png')
     buf.seek(0)
     
@@ -98,10 +102,10 @@ def create_heatmap_overlay(mel_spectrogram, heatmap):
     
     return f"data:image/png;base64,{image_base64}"
 
-
 def generate_text_explanation(heatmap, prediction_label):
     """
-    Analyzes the 12x12 heatmap and generates a simple sentence.
+    Analyzes the 12x12 heatmap and generates a simple sentence
+    in HTML.
     """
     
     # Find the "hottest" patch
@@ -127,11 +131,11 @@ def generate_text_explanation(heatmap, prediction_label):
     else:
         freq_band = "low-frequency"
         
-    # Generate the sentence
+    # Generate the sentence using HTML tags instead of markdown
     explanation = (
-        f"The model confidently identified the event as **{prediction_label}**. "
+        f"The model confidently identified the event as <strong>{prediction_label}</strong>. "
         f"Its decision was primarily based on a strong signal in the "
-        f"**{freq_band}** range, which occurred towards **{time_segment}** "
+        f"<strong>{freq_band}</strong> range, which occurred towards <strong>{time_segment}</strong> "
         f"of the audio clip."
     )
     

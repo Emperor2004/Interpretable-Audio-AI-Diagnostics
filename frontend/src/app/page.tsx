@@ -149,10 +149,10 @@ export default function HomePage() {
             <div className="mb-6 rounded-lg bg-white p-4 text-center shadow">
               <span className="text-lg text-gray-600">Top Prediction:</span>
               <h3 className="text-5xl font-bold text-blue-700">
-                {result.top_prediction.label}
+                {result?.top_prediction.label}
               </h3>
               <p className="text-2xl font-light text-gray-500">
-                ({result.top_prediction.confidence}% Confidence)
+                ({result?.top_prediction.confidence}% Confidence)
               </p>
             </div>
 
@@ -167,7 +167,7 @@ export default function HomePage() {
                   its decision. Red areas indicate high importance.
                 </p>
                 <img
-                  src={result.xai_heatmap_image}
+                  src={result?.xai_heatmap_image}
                   alt="XAI Attention Heatmap"
                   className="w-full rounded-md border border-gray-300"
                 />
@@ -179,8 +179,8 @@ export default function HomePage() {
                   Plain-Language Explanation
                 </h4>
                 <div
-                  className="prose prose-blue"
-                  dangerouslySetInnerHTML={{ __html: result.xai_explanation }}
+                  className="prose prose-blue text-gray-700"
+                  dangerouslySetInnerHTML={{ __html: result?.xai_explanation }}
                 />
                 
                 {/* --- Top 5 Predictions --- */}
@@ -188,7 +188,7 @@ export default function HomePage() {
                   Other Possibilities
                 </h4>
                 <ul className="list-inside list-disc space-y-1">
-                  {result.all_predictions.slice(1).map((pred) => (
+                  {result?.all_predictions.slice(1).map((pred) => (
                     <li key={pred.label} className="text-gray-600">
                       <strong>{pred.label}:</strong> {pred.confidence}%
                     </li>

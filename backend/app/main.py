@@ -106,7 +106,7 @@ async def analyze_audio(file: UploadFile = File(...)):
         }
 
     except Exception as e:
-        return HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
     finally:
         # Clean up the temporary file
         if os.path.exists(temp_file_path):
