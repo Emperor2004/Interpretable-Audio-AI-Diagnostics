@@ -38,12 +38,20 @@ def read_root():
 @app.post("/analyze_audio")
 async def analyze_audio(file: UploadFile = File(...)):
     """
-    Main endpoint to upload and analyze an audio file.
+    Main endpoint to upload and analyze an audio file using a
+    sliding window to find all *target sound events*.
     """
     if model is None:
         raise HTTPException(status_code=500, detail="Model is not loaded.")
         
-    # Create a temporary directory to store the file
+    # --- 1. Define Sliding Window Parameters ---
+    CHUNK_SEC = 1.5      # Analyze 1.5-second chunks
+    STEP_SEC = 0.5       # Move the window 0.5 seconds at a time
+    CONF_THRESHOLD = 0.80 # Only count if > 80% confident
+    
+    # --- NEW: Define all symptoms we want to find ---
+    TARGET_SYMPTOMS = ["coughing", "sneezing"]
+    
     temp_dir = "temp_audio"
     os.makedirs(temp_dir, exist_ok=True)
     temp_file_path = os.path.join(temp_dir, file.filename)
@@ -53,56 +61,71 @@ async def analyze_audio(file: UploadFile = File(...)):
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # 1. Load and process audio using Librosa
+        # --- 2. Load the *entire* audio file ---
         waveform, sr = processing.load_audio(temp_file_path)
         if waveform is None:
             raise HTTPException(status_code=400, detail="Could not process audio file.")
             
-        # 2. Prepare features for the AST model
-        # The processor creates the mel spectrogram and handles padding/truncation
-        inputs = processor(
-            waveform, 
-            sampling_rate=sr, 
-            return_tensors="pt"
-        )
+        # Convert chunk/step times to audio samples
+        chunk_samples = int(CHUNK_SEC * sr)
+        step_samples = int(STEP_SEC * sr)
+        total_samples = len(waveform)
         
-        mel_spectrogram = inputs.input_values[0] # Get the spectrogram for viz
+        all_predictions = []     # Store predictions from all chunks
+        # Store (start_time, end_time, label)
+        hot_timestamps = []
+        
+        # --- 3. Slide the window across the audio ---
+        for start in range(0, total_samples - chunk_samples, step_samples):
+            end = start + chunk_samples
+            chunk = waveform[start:end]
+            
+            # Prepare features for this chunk
+            inputs = processor(chunk, sampling_rate=sr, return_tensors="pt")
+            
+            # Run Inference
+            with torch.no_grad():
+                outputs = model(**inputs)
+            logits = outputs.logits
+            
+            # Get top prediction for this chunk
+            confidence, index = torch.max(torch.softmax(logits, dim=-1), dim=-1)
+            pred_id = index.item()
+            pred_label = id2label.get(pred_id, "Unknown")
+            pred_conf = confidence.item()
+            
+            # --- 4. Check for *any* target symptom ---
+            # --- (This is the updated logic) ---
+            if pred_label in TARGET_SYMPTOMS and pred_conf >= CONF_THRESHOLD:
+                start_time = start / sr
+                end_time = end / sr
+                # Add the label so we know *what* was found
+                hot_timestamps.append((start_time, end_time, pred_label))
 
-        # 3. Run Inference
-        with torch.no_grad():
-            outputs = model(**inputs, output_attentions=True)
-            
-        logits = outputs.logits
-        attentions = outputs.attentions # This is a tuple of all layer attentions
-        
-        # 4. Get Top-1 Prediction
-        # We get the top 5 just to show more info if needed
-        top_k = 5
-        confidences, indices = torch.topk(torch.softmax(logits, dim=-1), k=top_k)
-        
-        predictions = []
-        for i in range(top_k):
-            pred_id = indices[0][i].item()
-            predictions.append({
-                "label": id2label.get(pred_id, "Unknown"),
-                "confidence": round(confidences[0][i].item() * 100, 2)
-            })
-            
-        top_prediction_label = predictions[0]["label"]
-        
-        # 5. Generate XAI Insights (Heatmap + Text)
+        # --- 5. Determine Overall Prediction ---
+        if hot_timestamps:
+            # Use the label of the *first* detected event as the "top" one
+            top_prediction_label = hot_timestamps[0][2] 
+            top_prediction_conf = 100.0 # Placeholder
+        else:
+            top_prediction_label = "other"
+            top_prediction_conf = 100.0
+
+        # --- 6. Generate XAI Insights (Waveform + Text) ---
+        # We pass the raw, un-merged list of events to xai.py
         heatmap_base64, explanation = xai.generate_xai_insights(
-            attentions, 
-            mel_spectrogram,      # Keep this (it might still be useful)
-            waveform,             # <-- ADD THIS
-            sr,                   # <-- ADD THIS
-            top_prediction_label,
-            id2label
+            waveform,
+            sr,
+            hot_timestamps, # Pass the list of (start, end, label) tuples
+            top_prediction_label
         )
         
         return {
-            "top_prediction": predictions[0],
-            "all_predictions": predictions,
+            "top_prediction": {
+                "label": top_prediction_label,
+                "confidence": top_prediction_conf
+            },
+            "all_predictions": [],
             "xai_heatmap_image": heatmap_base64,
             "xai_explanation": explanation
         }
@@ -113,6 +136,6 @@ async def analyze_audio(file: UploadFile = File(...)):
         # Clean up the temporary file
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-
+            
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
