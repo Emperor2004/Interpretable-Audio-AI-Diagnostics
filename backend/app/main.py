@@ -47,9 +47,9 @@ async def analyze_audio(file: UploadFile = File(...)):
     # --- 1. Define Sliding Window Parameters ---
     CHUNK_SEC = 1.5      # Analyze 1.5-second chunks
     STEP_SEC = 0.5       # Move the window 0.5 seconds at a time
-    CONF_THRESHOLD = 0.80 # Only count if > 80% confident
     
-    # --- NEW: Define all symptoms we want to find ---
+    # --- CHANGE #1: Lower the threshold to catch weaker coughs ---
+    CONF_THRESHOLD = 0.80 # Was 0.80
     TARGET_SYMPTOMS = ["coughing", "sneezing"]
     
     temp_dir = "temp_audio"
@@ -66,12 +66,10 @@ async def analyze_audio(file: UploadFile = File(...)):
         if waveform is None:
             raise HTTPException(status_code=400, detail="Could not process audio file.")
             
-        # Convert chunk/step times to audio samples
         chunk_samples = int(CHUNK_SEC * sr)
         step_samples = int(STEP_SEC * sr)
         total_samples = len(waveform)
         
-        all_predictions = []     # Store predictions from all chunks
         # Store (start_time, end_time, label)
         hot_timestamps = []
         
@@ -80,43 +78,61 @@ async def analyze_audio(file: UploadFile = File(...)):
             end = start + chunk_samples
             chunk = waveform[start:end]
             
-            # Prepare features for this chunk
             inputs = processor(chunk, sampling_rate=sr, return_tensors="pt")
             
-            # Run Inference
             with torch.no_grad():
                 outputs = model(**inputs)
             logits = outputs.logits
             
-            # Get top prediction for this chunk
             confidence, index = torch.max(torch.softmax(logits, dim=-1), dim=-1)
             pred_id = index.item()
             pred_label = id2label.get(pred_id, "Unknown")
             pred_conf = confidence.item()
             
             # --- 4. Check for *any* target symptom ---
-            # --- (This is the updated logic) ---
             if pred_label in TARGET_SYMPTOMS and pred_conf >= CONF_THRESHOLD:
                 start_time = start / sr
                 end_time = end / sr
-                # Add the label so we know *what* was found
                 hot_timestamps.append((start_time, end_time, pred_label))
 
-        # --- 5. Determine Overall Prediction ---
+        # --- CHANGE #2: Add logic to merge overlapping events ---
+        merged_timestamps = []
         if hot_timestamps:
-            # Use the label of the *first* detected event as the "top" one
-            top_prediction_label = hot_timestamps[0][2] 
-            top_prediction_conf = 100.0 # Placeholder
+            # Sort by start time, just in case
+            hot_timestamps.sort(key=lambda x: x[0])
+            
+            # Start with the first event
+            current_start, current_end, current_label = hot_timestamps[0]
+            
+            for next_start, next_end, next_label in hot_timestamps[1:]:
+                # Check if events overlap AND are the same label
+                if next_start <= current_end and next_label == current_label:
+                    # Extend the current event
+                    current_end = max(current_end, next_end)
+                else:
+                    # No overlap, or different label, so save the previous event
+                    merged_timestamps.append((current_start, current_end, current_label))
+                    # Start a new event
+                    current_start, current_end, current_label = next_start, next_end, next_label
+            
+            # Add the very last event
+            merged_timestamps.append((current_start, current_end, current_label))
+        # --- End of CHANGE #2 ---
+
+        # --- 5. Determine Overall Prediction ---
+        if merged_timestamps:
+            top_prediction_label = merged_timestamps[0][2] 
+            top_prediction_conf = 100.0
         else:
             top_prediction_label = "other"
             top_prediction_conf = 100.0
 
         # --- 6. Generate XAI Insights (Waveform + Text) ---
-        # We pass the raw, un-merged list of events to xai.py
+        # Pass the new *merged* list to xai.py
         heatmap_base64, explanation = xai.generate_xai_insights(
             waveform,
             sr,
-            hot_timestamps, # Pass the list of (start, end, label) tuples
+            merged_timestamps, # Use the merged list
             top_prediction_label
         )
         
@@ -133,7 +149,6 @@ async def analyze_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
     finally:
-        # Clean up the temporary file
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
             
