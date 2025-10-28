@@ -93,7 +93,9 @@ async def analyze_audio(file: UploadFile = File(...)):
         # 5. Generate XAI Insights (Heatmap + Text)
         heatmap_base64, explanation = xai.generate_xai_insights(
             attentions, 
-            mel_spectrogram, 
+            mel_spectrogram,      # Keep this (it might still be useful)
+            waveform,             # <-- ADD THIS
+            sr,                   # <-- ADD THIS
             top_prediction_label,
             id2label
         )

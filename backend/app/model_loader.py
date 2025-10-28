@@ -5,7 +5,7 @@ import os
 # Use a SOTA Audio Spectrogram Transformer (AST)
 # This model is fine-tuned on AudioSet and can identify 527 sound classes,
 # including "Cough", "Wheezing", "Speech", "Snoring", etc.
-MODEL_NAME = "./my-finetuned-model"
+MODEL_NAME = "./model"
 # MODEL_NAME = os.getenv("MODEL_NAME", "MIT/ast-finetuned-audioset-10-10-0.4593")
 
 # This is a singleton pattern. These will be loaded once and reused.
