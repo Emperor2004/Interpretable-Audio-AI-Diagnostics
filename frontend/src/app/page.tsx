@@ -1,6 +1,6 @@
 'use client'; // This marks the component as a Client Component
 
-import { useState, ChangeEvent, FormEvent } from 'react';
+import { useState, ChangeEvent, FormEvent, useEffect } from 'react';
 import axios from 'axios';
 
 // --- Define the structure of the API response ---
@@ -19,13 +19,21 @@ interface AnalysisResult {
 // --- Main Page Component ---
 export default function HomePage() {
   const [file, setFile] = useState<File | null>(null);
+  const [audioURL, setAudioURL] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    // Revoke the old URL to prevent memory leaks
+    if (audioURL) {
+      URL.revokeObjectURL(audioURL);
+    }
+
     if (e.target.files) {
-      setFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      setFile(selectedFile);
+      setAudioURL(URL.createObjectURL(selectedFile));
       setResult(null); // Clear previous results
       setError(null);
     }
@@ -144,6 +152,18 @@ export default function HomePage() {
             <h2 className="mb-4 border-b border-gray-300 pb-2 text-3xl font-semibold text-gray-800">
               Analysis Results
             </h2>
+
+            {/* === AUDIO PLAYER BLOCK === */}
+            {audioURL && (
+              <div className="mb-6 rounded-lg bg-white p-4 shadow">
+                <h4 className="mb-2 text-xl font-semibold text-gray-700">
+                  Playback Audio
+                </h4>
+                <audio controls src={audioURL} className="w-full">
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
+            )}
 
             {/* --- Top Prediction --- */}
             <div className="mb-6 rounded-lg bg-white p-4 text-center shadow">
