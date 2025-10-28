@@ -156,23 +156,30 @@ export default function HomePage() {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-              {/* --- XAI Heatmap --- */}
-              <div className="rounded-lg bg-white p-4 shadow">
-                <h4 className="mb-2 text-xl font-semibold text-gray-700">
-                  XAI Attention Heatmap
-                </h4>
-                <p className="mb-4 text-sm text-gray-600">
-                  This image shows *where* the model &quot;listened&quot; to make
-                  its decision. Red areas indicate high importance.
-                </p>
+            {/* --- START FIX: New Layout Structure --- */}
+
+            {/* --- XAI Heatmap (Full Width) --- */}
+            <div className="mb-6 rounded-lg bg-white p-4 shadow md:col-span-2">
+              <h4 className="mb-2 text-xl font-semibold text-gray-700">
+                XAI Attention Heatmap
+              </h4>
+              <p className="mb-4 text-sm text-gray-600">
+                This image shows *where* the model &quot;listened&quot; to make
+                its decision. Red areas indicate high importance.
+              </p>
+              {/* Centering container for the image */}
+              <div className="flex w-full justify-center">
                 <img
                   src={result?.xai_heatmap_image}
                   alt="XAI Attention Heatmap"
-                  className="w-full rounded-md border border-gray-300"
+                  className="max-w-full rounded-md border border-gray-300 md:max-w-3xl"
                 />
               </div>
+            </div>
 
+            {/* --- Grid for Explanation and Other Predictions --- */}
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+              
               {/* --- XAI Explanation --- */}
               <div className="rounded-lg bg-white p-4 shadow">
                 <h4 className="mb-2 text-xl font-semibold text-gray-700">
@@ -182,9 +189,11 @@ export default function HomePage() {
                   className="prose prose-blue text-gray-700"
                   dangerouslySetInnerHTML={{ __html: result?.xai_explanation }}
                 />
-                
-                {/* --- Top 5 Predictions --- */}
-                <h4 className="mb-2 mt-6 text-xl font-semibold text-gray-700">
+              </div>
+
+              {/* --- Top 5 Predictions --- */}
+              <div className="rounded-lg bg-white p-4 shadow">
+                <h4 className="mb-2 text-xl font-semibold text-gray-700">
                   Other Possibilities
                 </h4>
                 <ul className="list-inside list-disc space-y-1">
@@ -196,6 +205,8 @@ export default function HomePage() {
                 </ul>
               </div>
             </div>
+            {/* --- END FIX --- */}
+
           </section>
         )}
       </main>
