@@ -18,8 +18,8 @@ DATASET_NAME = "ashraq/esc50"
 NEW_MODEL_DIR = "./my-finetuned-model" 
 
 # Training settings
-NUM_EPOCHS = 25  
-BATCH_SIZE = 16  # If you get a CUDA Out of Memory error, change this to 8.
+NUM_EPOCHS = 1
+BATCH_SIZE = 8  # If you get a CUDA Out of Memory error, change this to 8.
 
 print(f"Starting fine-tuning process...")
 print(f"Base Model: {MODEL_CHECKPOINT}")
@@ -139,9 +139,10 @@ training_args = TrainingArguments(
     lr_scheduler_type="cosine",
     warmup_ratio=0.1,
     weight_decay=0.01,
-    load_best_model_at_end=True,
+    # load_best_model_at_end=True,
     metric_for_best_model="accuracy",
     push_to_hub=False,
+    resume_from_checkpoint=True
 )
 
 trainer = Trainer(
