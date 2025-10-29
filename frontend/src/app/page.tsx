@@ -1,6 +1,6 @@
 'use client'; // This marks the component as a Client Component
 
-import { useState, ChangeEvent, FormEvent, useEffect } from 'react';
+import { useState, ChangeEvent, FormEvent } from 'react';
 import axios from 'axios';
 
 // --- Define the structure of the API response ---
@@ -9,11 +9,21 @@ interface Prediction {
   confidence: number;
 }
 
+interface ExplanationItem {
+  label: string;
+  count: number;
+}
+interface ExplanationResult {
+  primary_symptoms: ExplanationItem[];
+  other_sounds: ExplanationItem[];
+}
+
 interface AnalysisResult {
   top_prediction: Prediction;
   all_predictions: Prediction[];
-  xai_heatmap_image: string; // This will be a base64 data URL
-  xai_explanation: string;
+  xai_detection_plot: string;   // <-- This is the dual-plot
+  xai_attention_heatmap: string; // <-- This is the Grad-CAM plot
+  xai_explanation: ExplanationResult;
 }
 
 // --- Main Page Component ---
@@ -25,16 +35,14 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    // Revoke the old URL to prevent memory leaks
     if (audioURL) {
       URL.revokeObjectURL(audioURL);
     }
-
     if (e.target.files) {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
       setAudioURL(URL.createObjectURL(selectedFile));
-      setResult(null); // Clear previous results
+      setResult(null);
       setError(null);
     }
   };
@@ -50,19 +58,15 @@ export default function HomePage() {
     setError(null);
     setResult(null);
 
+    // Corrected Typo: FormData instead of formData
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      // Send the file to the FastAPI backend
       const response = await axios.post<AnalysisResult>(
         'http://localhost:8000/analyze_audio',
         formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        }
+        { headers: { 'Content-Type': 'multipart/form-data' } }
       );
       setResult(response.data);
     } catch (err: any) {
@@ -78,6 +82,7 @@ export default function HomePage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-start bg-gray-100 p-8">
+      {/* Corrected Closing Tag: Ensure <main> is properly closed at the end */}
       <main className="w-full max-w-4xl rounded-lg bg-white p-8 shadow-xl">
         {/* --- Header --- */}
         <div className="mb-6 border-b border-gray-200 pb-4">
@@ -85,8 +90,7 @@ export default function HomePage() {
             Interpretable Audio AI Diagnostics
           </h1>
           <p className="mt-2 text-center text-lg text-gray-600">
-            Upload an audio file (.wav, .mp3) to classify its content and
-            understand *why* the model made its decision.
+            Upload an audio file to demonstrate ResNet50 + Grad-CAM.
           </p>
         </div>
 
@@ -111,19 +115,18 @@ export default function HomePage() {
                          file:font-semibold file:text-blue-700
                          hover:file:bg-blue-100"
             />
+            {/* Corrected Syntax: Removed extra characters/spaces in className */}
             <button
               type="submit"
               disabled={!file || isLoading}
-              className="mt-4 w-full rounded-md bg-blue-600 px-4 py-2 text-lg font-semibold text-white
-                         shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed
-                         disabled:opacity-50"
+              className="mt-4 w-full rounded-md bg-blue-600 px-4 py-2 text-lg font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isLoading ? 'Analyzing...' : 'Analyze Audio'}
             </button>
           </div>
         </form>
 
-        {/* --- Loading Spinner --- */}
+        {/* --- Loading Spinner / Error --- */}
         {isLoading && (
           <div className="flex justify-center">
             <div
@@ -135,7 +138,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* --- Error Message --- */}
         {error && (
           <div
             className="rounded-md border border-red-400 bg-red-100 p-4 text-red-700"
@@ -147,89 +149,110 @@ export default function HomePage() {
         )}
 
         {/* --- Results Display --- */}
+        {/* Corrected: Ensure result is checked before accessing its properties */}
         {result && (
-          <section className="animate-fadeIn rounded-lg border border-gray-200 bg-gray-50 p-6">
-            <h2 className="mb-4 border-b border-gray-300 pb-2 text-3xl font-semibold text-gray-800">
-              Analysis Results
-            </h2>
+          <section className="animate-fadeIn rounded-lg border border-gray-200 bg-gray-50 p-6 grid grid-cols-1 gap-6">
 
-            {/* === AUDIO PLAYER BLOCK === */}
+            {/* --- Audio Player --- */}
             {audioURL && (
-              <div className="mb-6 rounded-lg bg-white p-4 shadow">
+              <div className="rounded-lg bg-white p-4 shadow">
                 <h4 className="mb-2 text-xl font-semibold text-gray-700">
                   Playback Audio
                 </h4>
-                <audio controls src={audioURL} className="w-full">
-                  Your browser does not support the audio element.
-                </audio>
+                <audio controls src={audioURL} className="w-full" />
               </div>
             )}
 
-            {/* --- Top Prediction --- */}
-            <div className="mb-6 rounded-lg bg-white p-4 text-center shadow">
-              <span className="text-lg text-gray-600">Top Prediction:</span>
-              <h3 className="text-5xl font-bold text-blue-700">
-                {result?.top_prediction.label}
-              </h3>
-              <p className="text-2xl font-light text-gray-500">
-                ({result?.top_prediction.confidence}% Confidence)
-              </p>
-            </div>
-
-            {/* --- START FIX: New Layout Structure --- */}
-
-            {/* --- XAI Heatmap (Full Width) --- */}
-            <div className="mb-6 rounded-lg bg-white p-4 shadow md:col-span-2">
+            {/* --- Full Audio Plot --- */}
+            <div className="rounded-lg bg-white p-4 shadow">
               <h4 className="mb-2 text-xl font-semibold text-gray-700">
-                XAI Attention Heatmap
+                Full Audio Plot
               </h4>
               <p className="mb-4 text-sm text-gray-600">
-                This image shows *where* the model &quot;listened&quot; to make
-                its decision. Red areas indicate high importance.
+                This plot shows the audio waveform and full spectrogram.
               </p>
-              {/* Centering container for the image */}
               <div className="flex w-full justify-center">
                 <img
-                  src={result?.xai_heatmap_image}
-                  alt="XAI Attention Heatmap"
-                  className="max-w-full rounded-md border border-gray-300 md:max-w-3xl"
+                  src={result.xai_detection_plot}
+                  alt="Symptom Detection Plot"
+                  className="max-w-full rounded-md border border-gray-300 w-full"
                 />
               </div>
             </div>
 
-            {/* --- Grid for Explanation and Other Predictions --- */}
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-              
-              {/* --- XAI Explanation --- */}
+            {/* --- XAI Grad-CAM Heatmap --- */}
+            {result.xai_attention_heatmap && (
               <div className="rounded-lg bg-white p-4 shadow">
                 <h4 className="mb-2 text-xl font-semibold text-gray-700">
-                  Plain-Language Explanation
+                  XAI (Grad-CAM) Heatmap
                 </h4>
-                <div
-                  className="prose prose-blue text-gray-700"
-                  dangerouslySetInnerHTML={{ __html: result?.xai_explanation }}
-                />
+                <p className="mb-4 text-sm text-gray-600">
+                  This is the "AI brain scan" for the first non-silent chunk.
+                  Red areas on the spectrogram show what the model
+                  "listened" to the most to make its decision.
+                </p>
+                <div className="flex w-full justify-center">
+                  <img
+                    src={result.xai_attention_heatmap}
+                    alt="XAI Grad-CAM Heatmap"
+                    className="max-w-full rounded-md border border-gray-300 w-full"
+                  />
+                </div>
               </div>
+            )}
 
-              {/* --- Top 5 Predictions --- */}
-              <div className="rounded-lg bg-white p-4 shadow">
-                <h4 className="mb-2 text-xl font-semibold text-gray-700">
-                  Other Possibilities
-                </h4>
-                <ul className="list-inside list-disc space-y-1">
-                  {result?.all_predictions.slice(1).map((pred) => (
-                    <li key={pred.label} className="text-gray-600">
-                      <strong>{pred.label}:</strong> {pred.confidence}%
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            {/* --- END FIX --- */}
+            {/* --- XAI Explanation --- */}
+            <div className="rounded-lg bg-white p-4 shadow">
+              <h4 className="mb-2 text-xl font-semibold text-gray-700">
+                Analysis Explanation
+              </h4>
+              <div className="space-y-4 text-gray-700">
 
-          </section>
-        )}
-      </main>
-    </div>
+                {/* --- Primary Symptoms --- */}
+                {/* Corrected Syntax: Ensure proper mapping and closing tags */}
+                {result.xai_explanation.primary_symptoms.length > 0 ? (
+                  <div>
+                    <h5 className="font-semibold">Primary Symptoms Detected:</h5>
+                    <ul className="list-inside list-disc pl-2">
+                      {result.xai_explanation.primary_symptoms.map((item) => (
+                        <li key={item.label}>
+                          <strong>{item.count} {item.label} event(s)</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {/* --- Other Sounds --- */}
+                {/* Corrected Syntax: Ensure proper mapping and closing tags */}
+                {result.xai_explanation.other_sounds.length > 0 ? (
+                  <div>
+                    <h5 className="font-semibold">Other Sounds Detected:</h5>
+                    <ul className="list-inside list-disc pl-2">
+                      {result.xai_explanation.other_sounds.map((item) => (
+                        <li key={item.label}>
+                          {item.label} (detected in {item.count} analysis chunks)
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {/* --- No Detections Case --- */}
+                {result.xai_explanation.primary_symptoms.length === 0 &&
+                  result.xai_explanation.other_sounds.length === 0 && (
+                    <p>
+                      <strong>No significant audio events were detected.</strong> The model
+                      did not find any target symptoms or other identifiable
+                      sounds with high confidence.
+                    </p>
+                  )}
+              </div> {/* End space-y-4 div */}
+            </div> {/* End Explanation Card div */}
+
+          </section> /* End Results Section */
+        )} {/* End Conditional Render for result */}
+      </main> {/* Corrected: Added closing tag for main */}
+    </div> /* End Root div */
   );
 }

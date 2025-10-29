@@ -1,7 +1,7 @@
 import librosa
 import numpy as np
 
-TARGET_SAMPLE_RATE = 16000  # AST model requires 16kHz audio
+TARGET_SAMPLE_RATE = 16000  # AST/ResNet both work well with 16kHz
 
 def load_audio(file_path):
     """
@@ -9,15 +9,11 @@ def load_audio(file_path):
     and resamples it to the target sample rate.
     """
     try:
-        # Load audio file
-        # sr=None preserves the original sample rate
         waveform, sr = librosa.load(file_path, sr=None, mono=False)
 
-        # Convert to mono if it's stereo
         if waveform.ndim > 1:
             waveform = librosa.to_mono(waveform)
 
-        # Resample to the target sample rate (16kHz for AST)
         if sr != TARGET_SAMPLE_RATE:
             waveform = librosa.resample(waveform, orig_sr=sr, target_sr=TARGET_SAMPLE_RATE)
             
