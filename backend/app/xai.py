@@ -1,3 +1,8 @@
+"""
+xai.py - Explainable AI (Grad-CAM) visualization
+This module generates Grad-CAM visualizations for PANNs predictions.
+"""
+
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,23 +16,31 @@ from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 import librosa
 import librosa.display 
 
-# Global model instance is imported from processing.py
+# Import from centralized model loader
 try:
-    from .processing import load_panns_model, SAMPLE_RATE, HOP_SIZE, device, MEL_BINS
+    from . import model_loader
+    SAMPLE_RATE = model_loader.SAMPLE_RATE
+    HOP_SIZE = model_loader.HOP_SIZE
+    MEL_BINS = model_loader.MEL_BINS
+    device = model_loader.device
 except ImportError as e:
-    print(f"Error importing processing module: {e}")
+    print(f"Error importing model_loader: {e}")
     SAMPLE_RATE = 32000
     HOP_SIZE = 320
     MEL_BINS = 64
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    def load_panns_model():
-        return None, None
 
 def panns_reshape_transform(tensor):
     """
     Reshapes the feature map output from the PANNs model's ConvBlocks.
     Input shape is typically (B, C, 1, H, W) for audio treated as 1D.
     Output shape should be (B, C, H, W).
+    
+    Args:
+        tensor: Feature map from convolutional layer
+        
+    Returns:
+        torch.Tensor: Reshaped feature map
     """
     if tensor.dim() == 5:
         tensor = tensor.squeeze(2)
@@ -36,15 +49,27 @@ def panns_reshape_transform(tensor):
 class PANNsModelWrapper(torch.nn.Module):
     """
     Wrapper for PANNs model to make it compatible with Grad-CAM.
+    
     This wrapper:
     1. Takes spectrogram input (already processed by spectrogram_extractor and logmel_extractor)
     2. Returns only the clipwise_output tensor (not a dictionary)
+    
+    PANNs models return dictionaries, but Grad-CAM expects tensor outputs.
     """
     def __init__(self, model):
         super().__init__()
         self.model = model
     
     def forward(self, x):
+        """
+        Forward pass through PANNs model starting from preprocessed spectrogram.
+        
+        Args:
+            x: Preprocessed spectrogram tensor (batch, 1, time, freq)
+            
+        Returns:
+            torch.Tensor: Clipwise output predictions
+        """
         # Input x should be shape (batch, 1, time, freq) from logmel_extractor
         # Pass through batch normalization
         x = x.transpose(1, 3)  # (batch, freq, time, 1)
@@ -76,22 +101,28 @@ class PANNsModelWrapper(torch.nn.Module):
 def generate_grad_cam(waveform_tensor: torch.Tensor, spectrogram_tensor: torch.Tensor, 
                       target_index: int) -> Optional[str]:
     """
-    Generates Grad-CAM visualization for the top predicted class.
+    Generates Grad-CAM visualization for the predicted class.
 
     Args:
-        waveform_tensor (torch.Tensor): Raw audio waveform tensor (1, samples) - used to generate fresh spectrogram
-        spectrogram_tensor (torch.Tensor): Pre-computed spectrogram (1, 1, H, W) for visualization overlay
-        target_index (int): The index of the predicted class to explain.
+        waveform_tensor: Raw audio waveform tensor (1, samples) - used to generate fresh spectrogram
+        spectrogram_tensor: Pre-computed spectrogram (1, 1, H, W) for visualization overlay
+        target_index: The index of the predicted class to explain
 
     Returns:
-        Optional[str]: Base64-encoded image string of the CAM overlay, or None on failure.
+        Optional[str]: Base64-encoded PNG image string of the CAM overlay, or None on failure
     """
     
-    model, _ = load_panns_model()
+    # Get model from centralized loader
+    try:
+        model = model_loader.get_model()
+    except Exception as e:
+        print(f"Error loading model for Grad-CAM: {e}")
+        return None
+    
     if model is None:
         return None
     
-    # We need to pass the waveform through the model's spectrogram extractor
+    # Pass the waveform through the model's spectrogram extractor
     # to get the proper input format for Grad-CAM
     with torch.no_grad():
         # Extract spectrogram using the model's built-in extractor
@@ -103,7 +134,7 @@ def generate_grad_cam(waveform_tensor: torch.Tensor, spectrogram_tensor: torch.T
     # Wrap the model to work with Grad-CAM
     wrapped_model = PANNsModelWrapper(model)
     
-    # Target the convolutional layer from the original model (not the wrapper)
+    # Target the final convolutional layer for highest-level semantic features
     target_layers = [model.conv_block6.conv2]
     
     # Define the target: the output of the specified class index
@@ -119,7 +150,7 @@ def generate_grad_cam(waveform_tensor: torch.Tensor, spectrogram_tensor: torch.T
             reshape_transform=panns_reshape_transform
         )
         
-        # CRITICAL: Pass the spectrogram (not raw waveform) to Grad-CAM
+        # Generate the CAM heatmap
         grayscale_cam = cam(input_tensor=spec_for_gradcam, targets=targets)[0, :]
 
         # ------------------- Visualization -------------------
@@ -140,8 +171,7 @@ def generate_grad_cam(waveform_tensor: torch.Tensor, spectrogram_tensor: torch.T
                                  ax=ax)
 
         # Overlay Grad-CAM Heatmap
-        # The CAM output might have different dimensions than the spectrogram
-        # Resize CAM to match spectrogram dimensions
+        # Resize CAM to match spectrogram dimensions if needed
         from scipy.ndimage import zoom
         if grayscale_cam.shape != spectrogram_np.shape:
             zoom_factors = (spectrogram_np.shape[0] / grayscale_cam.shape[0],
@@ -153,7 +183,14 @@ def generate_grad_cam(waveform_tensor: torch.Tensor, spectrogram_tensor: torch.T
                          ax.get_ylim()[0], ax.get_ylim()[1]], 
                   aspect='auto')
 
-        ax.set_title(f'Grad-CAM for Class Index {target_index}')
+        # Get label name for title
+        try:
+            labels = model_loader.get_labels()
+            label_name = labels[target_index]
+            ax.set_title(f'Grad-CAM: {label_name}')
+        except:
+            ax.set_title(f'Grad-CAM for Class Index {target_index}')
+        
         plt.tight_layout()
 
         # Convert Plot to Base64 String

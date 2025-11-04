@@ -10,6 +10,7 @@ from typing import List, Dict, Any
 
 from . import processing
 from . import xai
+from . import model_loader
 
 # --- FastAPI Setup ---
 
@@ -42,8 +43,12 @@ class AnalysisResponse(BaseModel):
 @app.on_event("startup")
 def startup_event():
     """Load model and setup dependencies on startup."""
-    # Ensure model loads eagerly and prints status
-    processing.load_panns_model()
+    # Use centralized model loader for eager loading
+    try:
+        model_loader.get_model()
+        print("✓ Model preloaded successfully on startup")
+    except Exception as e:
+        print(f"✗ Failed to preload model on startup: {e}")
 
 # --- Endpoints ---
 
