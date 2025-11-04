@@ -1,164 +1,181 @@
+import torch
 import matplotlib.pyplot as plt
 import numpy as np
-import io
 import base64
-import librosa
-import librosa.display
-from collections import Counter
-import torch
-import torch.nn.functional as F
+from io import BytesIO
+from typing import Optional
 
-# --- Import GRAD-CAM ---
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
-from pytorch_grad_cam.utils.image import show_cam_on_image
 
-from .model_loader import get_model_components
+import librosa
+import librosa.display 
 
-model, _, _ = get_model_components()
+# Global model instance is imported from processing.py
+try:
+    from .processing import load_panns_model, SAMPLE_RATE, HOP_SIZE, device, MEL_BINS
+except ImportError as e:
+    print(f"Error importing processing module: {e}")
+    SAMPLE_RATE = 32000
+    HOP_SIZE = 320
+    MEL_BINS = 64
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def load_panns_model():
+        return None, None
 
-def generate_xai_insights(waveform, sr, hot_timestamps, all_chunk_predictions, best_chunk_spectrogram, best_chunk_pred_id):
+def panns_reshape_transform(tensor):
     """
-    Generates all XAI visualizations and explanations.
+    Reshapes the feature map output from the PANNs model's ConvBlocks.
+    Input shape is typically (B, C, 1, H, W) for audio treated as 1D.
+    Output shape should be (B, C, H, W).
+    """
+    if tensor.dim() == 5:
+        tensor = tensor.squeeze(2)
+    return tensor
+
+class PANNsModelWrapper(torch.nn.Module):
+    """
+    Wrapper for PANNs model to make it compatible with Grad-CAM.
+    This wrapper:
+    1. Takes spectrogram input (already processed by spectrogram_extractor and logmel_extractor)
+    2. Returns only the clipwise_output tensor (not a dictionary)
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+    
+    def forward(self, x):
+        # Input x should be shape (batch, 1, time, freq) from logmel_extractor
+        # Pass through batch normalization
+        x = x.transpose(1, 3)  # (batch, freq, time, 1)
+        x = self.model.bn0(x)
+        x = x.transpose(1, 3)  # (batch, 1, time, freq)
+        
+        # Pass through all conv blocks
+        x = self.model.conv_block1(x, pool_size=(2, 2), pool_type='avg')
+        x = self.model.conv_block2(x, pool_size=(2, 2), pool_type='avg')
+        x = self.model.conv_block3(x, pool_size=(2, 2), pool_type='avg')
+        x = self.model.conv_block4(x, pool_size=(2, 2), pool_type='avg')
+        x = self.model.conv_block5(x, pool_size=(2, 2), pool_type='avg')
+        x = self.model.conv_block6(x, pool_size=(1, 1), pool_type='avg')
+        
+        # Global pooling
+        x = torch.mean(x, dim=3)
+        
+        # Aggregate across time
+        (x1, _) = torch.max(x, dim=2)
+        x2 = torch.mean(x, dim=2)
+        x = x1 + x2
+        
+        # Dropout and final fully connected layer
+        x = torch.nn.functional.dropout(x, p=0.5, training=self.model.training)
+        clipwise_output = torch.sigmoid(self.model.fc_audioset(x))
+        
+        return clipwise_output
+
+def generate_grad_cam(waveform_tensor: torch.Tensor, spectrogram_tensor: torch.Tensor, 
+                      target_index: int) -> Optional[str]:
+    """
+    Generates Grad-CAM visualization for the top predicted class.
+
+    Args:
+        waveform_tensor (torch.Tensor): Raw audio waveform tensor (1, samples) - used to generate fresh spectrogram
+        spectrogram_tensor (torch.Tensor): Pre-computed spectrogram (1, 1, H, W) for visualization overlay
+        target_index (int): The index of the predicted class to explain.
+
+    Returns:
+        Optional[str]: Base64-encoded image string of the CAM overlay, or None on failure.
     """
     
-    detection_plot_b64 = create_dual_plot(waveform, sr)
-    
-    xai_heatmap_b64 = None
-    if best_chunk_spectrogram is not None and model is not None and best_chunk_pred_id != -1:
-        try:
-            xai_heatmap_b64 = create_grad_cam_heatmap(best_chunk_spectrogram, best_chunk_pred_id)
-        except Exception as e:
-            print(f"Error generating GRAD-CAM heatmap: {e}")
-            xai_heatmap_b64 = None
-    
-    explanation_dict = generate_text_explanation(hot_timestamps, all_chunk_predictions)
-    
-    return detection_plot_b64, xai_heatmap_b64, explanation_dict
-
-
-def create_grad_cam_heatmap(chunk_spectrogram, pred_id):
-    """
-    Runs GRAD-CAM on the provided 224x224 spectrogram chunk.
-    """
+    model, _ = load_panns_model()
     if model is None:
         return None
-
-    # --- 1. Prepare inputs for GRAD-CAM ---
-    # Add batch and channel dimensions: (1, 1, 224, 224)
-    input_tensor = chunk_spectrogram.unsqueeze(0).unsqueeze(0)
-
-    # --- 2. Set up GRAD-CAM ---
-    # Target the last conv layer in ResNet50, as per your diagram
-    target_layer = model.base_model.layer4[-1] 
     
-    cam = GradCAM(
-        model=model, 
-        target_layers=[target_layer], 
-        use_cuda=torch.cuda.is_available()
-    )
+    # We need to pass the waveform through the model's spectrogram extractor
+    # to get the proper input format for Grad-CAM
+    with torch.no_grad():
+        # Extract spectrogram using the model's built-in extractor
+        x = model.spectrogram_extractor(waveform_tensor)
+        x = model.logmel_extractor(x)
+        # Output shape: (batch, 1, time, freq)
+        spec_for_gradcam = x
     
-    # Target the specific class ID
-    targets = [ClassifierOutputTarget(pred_id)]
-
-    # --- 3. Generate the heatmap (Grad-CAM steps 1-4) ---
-    grayscale_cam = cam(
-        input_tensor=input_tensor, 
-        targets=targets
-    )
-    grayscale_cam = grayscale_cam[0, :] # Get first heatmap
+    # Wrap the model to work with Grad-CAM
+    wrapped_model = PANNsModelWrapper(model)
     
-    # --- 4. Normalize spectrogram for visualization ---
-    spec_min = chunk_spectrogram.min()
-    spec_max = chunk_spectrogram.max()
-    spec_img = (chunk_spectrogram - spec_min) / (spec_max - spec_min)
-    spec_img_rgb = np.stack([spec_img.numpy()] * 3, axis=-1)
-
-    # --- 5. Overlay heatmap (Visualization Module) ---
-    visualization = show_cam_on_image(
-        spec_img_rgb, 
-        grayscale_cam, 
-        use_rgb=True,
-        image_weight=0.6 # This is the 60/40 blend
-    )
+    # Target the convolutional layer from the original model (not the wrapper)
+    target_layers = [model.conv_block6.conv2]
     
-    # --- 6. Plot the final image ---
-    fig, ax = plt.subplots(figsize=(10, 5)) # Adjusted size
-    ax.imshow(visualization)
-    ax.set_title("GRAD-CAM Heatmap (for first non-silent chunk)")
-    ax.set_xlabel("Time (Frames)")
-    ax.set_ylabel("Mel Bins (Frequency)")
-    fig.tight_layout()
+    # Define the target: the output of the specified class index
+    targets = [ClassifierOutputTarget(target_index)]
 
-    # --- 7. Convert to Base64 ---
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    image_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    buf.close()
-    plt.close(fig)
-    
-    return f"data:image/png;base64,{image_base64}"
+    try:
+        print(f"Debug: Spectrogram for Grad-CAM shape: {spec_for_gradcam.shape}")
+        
+        # Initialize GradCAM with the wrapped model
+        cam = GradCAM(
+            model=wrapped_model, 
+            target_layers=target_layers,
+            reshape_transform=panns_reshape_transform
+        )
+        
+        # CRITICAL: Pass the spectrogram (not raw waveform) to Grad-CAM
+        grayscale_cam = cam(input_tensor=spec_for_gradcam, targets=targets)[0, :]
 
+        # ------------------- Visualization -------------------
 
-def create_dual_plot(waveform, sr):
-    """
-    Plots the full audio waveform and its spectrogram.
-    NOTE: Spectrogram is now 224-bins to be consistent.
-    """
-    SYMPTOM_COLORS = {
-        "coughing": "red",
-        "sneezing": "orange",
-        "default": "gray"
-    }
-    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    
-    # --- Plot 1: Waveform ---
-    librosa.display.waveshow(waveform, sr=sr, ax=axes[0], color='blue', alpha=0.6)
-    axes[0].set_title("Symptom Detection Plot")
-    axes[0].set_ylabel("Amplitude")
-    axes[0].set_xlabel(None)
-    
-    # --- Plot 2: Spectrogram (now 224 bins) ---
-    S_db = librosa.power_to_db(
-        librosa.feature.melspectrogram(y=waveform, sr=sr, n_mels=224, n_fft=2048, hop_length=512), 
-        ref=np.max
-    )
-    librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='mel', ax=axes[1])
-    axes[1].set_ylabel("Mel Frequency (224 Bins)")
-    axes[1].set_xlabel("Time (s)")
+        # Use the pre-computed spectrogram for visualization
+        spectrogram_np = spectrogram_tensor.squeeze().cpu().numpy()
+        
+        # Setup plotting
+        plt.ioff()
+        fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
+        
+        # Plot Spectrogram (Base Image)
+        librosa.display.specshow(spectrogram_np, 
+                                 sr=SAMPLE_RATE, 
+                                 hop_length=HOP_SIZE, 
+                                 x_axis='time', 
+                                 y_axis='mel',
+                                 ax=ax)
 
-    # --- Highlighting logic is now removed ---
-    # We are just showing the full plot, highlights are in the text
-    
-    fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    image_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    buf.close()
-    plt.close(fig)
-    return f"data:image/png;base64,{image_base64}"
+        # Overlay Grad-CAM Heatmap
+        # The CAM output might have different dimensions than the spectrogram
+        # Resize CAM to match spectrogram dimensions
+        from scipy.ndimage import zoom
+        if grayscale_cam.shape != spectrogram_np.shape:
+            zoom_factors = (spectrogram_np.shape[0] / grayscale_cam.shape[0],
+                          spectrogram_np.shape[1] / grayscale_cam.shape[1])
+            grayscale_cam = zoom(grayscale_cam, zoom_factors, order=1)
+        
+        ax.imshow(grayscale_cam, cmap='jet', alpha=0.5, 
+                  extent=[ax.get_xlim()[0], ax.get_xlim()[1], 
+                         ax.get_ylim()[0], ax.get_ylim()[1]], 
+                  aspect='auto')
 
-# --- This function is unchanged ---
-def generate_text_explanation(hot_timestamps, all_chunk_predictions):
-    target_counts = Counter([label for _, _, label in hot_timestamps])
-    other_labels = Counter()
-    target_symptoms_set = {"coughing", "sneezing"} 
-    for chunk in all_chunk_predictions:
-        label = chunk['label']
-        confidence = chunk['confidence']
-        if confidence > 0.50 and label not in target_symptoms_set:
-            other_labels[label] += 1
-    primary_symptoms = [
-        {"label": label.replace("_", " ").title(), "count": count}
-        for label, count in target_counts.items()
-    ]
-    other_sounds = [
-        {"label": label.replace("_", " ").title(), "count": count}
-        for label, count in other_labels.most_common(3)
-    ]
-    return {
-        "primary_symptoms": primary_symptoms,
-        "other_sounds": other_sounds
-    }
+        ax.set_title(f'Grad-CAM for Class Index {target_index}')
+        plt.tight_layout()
+
+        # Convert Plot to Base64 String
+        buf = BytesIO()
+        plt.savefig(buf, format='png')
+        plt.close(fig)
+        buf.seek(0)
+        
+        return base64.b64encode(buf.read()).decode('utf-8')
+
+    except Exception as e:
+        print(f"Error during Grad-CAM generation: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+        
+    finally:
+        # Ensure resources are cleaned up
+        if 'cam' in locals():
+            del cam
+        try:
+            if 'fig' in locals():
+                plt.close(fig)
+        except:
+            pass

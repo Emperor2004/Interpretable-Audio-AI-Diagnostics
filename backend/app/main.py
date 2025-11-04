@@ -1,20 +1,26 @@
-import uvicorn
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import torch
-import numpy as np
-import shutil
 import os
-import librosa
+import shutil
+import tempfile
+import torch
 
-from . import model_loader
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Dict, Any
+
 from . import processing
 from . import xai
 
-app = FastAPI(title="Interpretable Audio AI API")
+# --- FastAPI Setup ---
 
-# --- CORS Middleware (Unchanged) ---
-origins = ["http://localhost:3000"]
+# Initialize FastAPI application
+app = FastAPI(title="PANNs Audio XAI Backend")
+
+# Define CORS settings to allow frontend access
+origins = [
+    "*", # Allow all origins for local development
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -23,148 +29,103 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model, _, id2label = model_loader.get_model_components()
+# --- Utility Models ---
 
-if model is None:
-    print("FATAL: Model could not be loaded. API will not be functional.")
+class AnalysisResponse(BaseModel):
+    """Schema for the successful analysis response."""
+    predictions: List[Dict[str, Any]]
+    cam_base64: str
+    prediction_time: float = 0.0
+
+# --- Lifecycle Hooks ---
+
+@app.on_event("startup")
+def startup_event():
+    """Load model and setup dependencies on startup."""
+    # Ensure model loads eagerly and prints status
+    processing.load_panns_model()
+
+# --- Endpoints ---
 
 @app.get("/")
 def read_root():
-    return {"message": "Interpretable Audio AI API is running."}
+    return {"status": "PANNs XAI Backend Running"}
 
-# --- Updated Spectrogram helper function ---
-def waveform_to_spectrogram(waveform, sr, n_mels=224, target_width=224):
-    """
-    Converts a waveform to a 224x224 Mel Spectrogram for ResNet50.
-    """
-    S = librosa.feature.melspectrogram(
-        y=waveform, 
-        sr=sr, 
-        n_mels=n_mels,  # 224 bins
-        n_fft=2048,
-        hop_length=512
-    )
-    S_db = librosa.power_to_db(S, ref=np.max)
-    
-    # --- Resize to a fixed image size ---
-    if S_db.shape[1] < target_width:
-        pad_width = target_width - S_db.shape[1]
-        S_db = np.pad(S_db, ((0, 0), (0, pad_width)), mode='constant')
-    else:
-        S_db = S_db[:, :target_width]
-    
-    return torch.tensor(S_db, dtype=torch.float32)
-# ---
-
-@app.post("/analyze_audio")
+@app.post("/analyze_audio", response_model=AnalysisResponse)
 async def analyze_audio(file: UploadFile = File(...)):
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model is not loaded.")
-        
-    CHUNK_SEC = 2.5 # Need more time for a 224-width spectrogram
-    STEP_SEC = 1.0   
-    CONF_THRESHOLD = 0.0 
-    TARGET_SYMPTOMS = ["coughing", "sneezing"] 
+    """
+    Receives an audio file, runs PANNs prediction, and generates Grad-CAM visualization.
+    """
     
-    temp_dir = "temp_audio"
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_file_path = os.path.join(temp_dir, file.filename)
-    
+    # 1. Save uploaded file to a temporary location
     try:
-        with open(temp_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        waveform, sr = processing.load_audio(temp_file_path)
-        if waveform is None:
-            raise HTTPException(status_code=400, detail="Could not process audio file.")
-            
-        chunk_samples = int(CHUNK_SEC * sr)
-        step_samples = int(STEP_SEC * sr)
-        total_samples = len(waveform)
-        
-        hot_timestamps = []
-        all_chunk_predictions = [] 
-        
-        best_chunk_spectrogram = None
-        best_chunk_pred_id = -1
-        
-        for start in range(0, total_samples - chunk_samples, step_samples):
-            end = start + chunk_samples
-            chunk_waveform = waveform[start:end]
-            
-            # --- Convert chunk to 224x224 Spectrogram ---
-            chunk_spectrogram = waveform_to_spectrogram(chunk_waveform, sr)
-            
-            inputs = chunk_spectrogram.unsqueeze(0) 
-            
-            with torch.no_grad():
-                logits = model(inputs)
-                
-            confidence, index = torch.max(torch.softmax(logits, dim=-1), dim=-1)
-            pred_id = index.item()
-            pred_label = id2label.get(pred_id, "Unknown")
-            pred_conf = confidence.item()
-            
-            all_chunk_predictions.append({"label": pred_label, "confidence": pred_conf})
-            
-            # --- This is the fix for the blank heatmap ---
-            # Save the FIRST *NON-SILENT* chunk for Grad-CAM
-            if best_chunk_spectrogram is None and chunk_waveform.any():
-                best_chunk_spectrogram = chunk_spectrogram
-                best_chunk_pred_id = pred_id
-            
-            if pred_label in TARGET_SYMPTOMS and pred_conf >= CONF_THRESHOLD:
-                start_time = start / sr
-                end_time = end / sr
-                hot_timestamps.append((start_time, end_time, pred_label))
+        # FastAPI's recommended way to handle files for external processing
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            shutil.copyfileobj(file.file, temp_file)
+            temp_file_path = temp_file.name
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not save file temporarily: {e}")
+    finally:
+        # Ensure the UploadFile content is consumed
+        await file.close()
 
-        # --- Event merging logic (UNCHANGED) ---
-        merged_timestamps = []
-        if hot_timestamps:
-            hot_timestamps.sort(key=lambda x: x[0])
-            current_start, current_end, current_label = hot_timestamps[0]
-            for next_start, next_end, next_label in hot_timestamps[1:]:
-                if next_start <= current_end and next_label == current_label:
-                    current_end = max(current_end, next_end)
-                else:
-                    merged_timestamps.append((current_start, current_end, current_label))
-                    current_start, current_end, current_label = next_start, next_end, next_label
-            merged_timestamps.append((current_start, current_end, current_label))
-        # ---
+    try:
+        # 2. Run full analysis (load, preprocess, predict)
+        audio_np, sr, spectrogram_tensor, analysis_result = processing.get_full_analysis(temp_file_path)
 
-        if merged_timestamps:
-            top_prediction_label = merged_timestamps[0][2] 
-            top_prediction_conf = 100.0
-        else:
-            top_prediction_label = "other"
-            top_prediction_conf = 100.0
+        # CRITICAL FIX: Handle error dictionary returned by processing.py
+        if isinstance(analysis_result, dict) and "error" in analysis_result:
+            # Raise an HTTPException with the specific error message
+            raise HTTPException(status_code=500, detail=analysis_result["error"])
 
-        # --- Generate XAI Insights (Grad-CAM) ---
-        detection_plot_b64, xai_heatmap_b64, explanation_dict = xai.generate_xai_insights(
-            waveform,
-            sr,
-            merged_timestamps,
-            all_chunk_predictions,
-            best_chunk_spectrogram,
-            best_chunk_pred_id 
+        # analysis_result is now the successful list of predictions
+        predictions = analysis_result
+        
+        # Find the index of the top predicted class for CAM generation
+        if not predictions:
+            raise HTTPException(status_code=400, detail="No predictions could be generated for the provided audio.")
+            
+        target_index = predictions[0]['index']
+
+        # 3. Generate Grad-CAM image (base64 encoded)
+        # CRITICAL FIX: Create waveform tensor and pass both waveform and spectrogram
+        waveform_tensor = torch.from_numpy(audio_np).float().unsqueeze(0).to(processing.device)
+        
+        print(f"Debug: Creating waveform tensor for Grad-CAM with shape: {waveform_tensor.shape}")
+        print(f"Debug: Spectrogram tensor shape: {spectrogram_tensor.shape}")
+        print(f"Debug: Target index: {target_index}")
+        
+        cam_base64 = xai.generate_grad_cam(
+            waveform_tensor=waveform_tensor,
+            spectrogram_tensor=spectrogram_tensor,
+            target_index=target_index
         )
         
-        return {
-            "top_prediction": {
-                "label": top_prediction_label,
-                "confidence": top_prediction_conf
-            },
-            "all_predictions": [],
-            "xai_detection_plot": detection_plot_b64,
-            "xai_attention_heatmap": xai_heatmap_b64,
-            "xai_explanation": explanation_dict
-        }
+        if cam_base64 is None:
+            raise HTTPException(status_code=500, detail="Failed to generate Grad-CAM visualization.")
+            
+        # 4. Return results
+        return AnalysisResponse(
+            predictions=predictions,
+            cam_base64=cam_base64,
+            prediction_time=0.0 # Placeholder for actual time if measured
+        )
 
+    except HTTPException:
+        # Re-raise explicit HTTP exceptions (e.g., 400 or specific 500s we raised above)
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        # Catch any unexpected Python exceptions
+        print(f"Unexpected error during analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during analysis: {str(e)}")
+        
     finally:
+        # 5. Cleanup temporary file
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-            
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# --- XAI Module Import Check ---
+# Note: The Grad-CAM model logic is in xai.py
+# The target layer for Cnn14 is 'model.conv_block4.conv'

@@ -1,70 +1,56 @@
-from torchvision.models import resnet50, ResNet50_Weights
-from torch import nn
+from panns_inference.models import Cnn14
+from panns_inference.config import labels # Import 'labels' list directly
 import torch
 import os
-from transformers import AutoConfig
+# from transformers import AutoConfig # Not needed
 
-# --- 1. Define the ResNet50 CNN model ---
-# This class implements the "ResNet50 Architecture" from your diagram.
+# --- 1. Load the PANNs Cnn14 Model ---
+model_name = "PANNs Cnn14 (Pretrained on AudioSet)"
 
-class AudioResNet50(nn.Module):
-    def __init__(self, num_labels=2):
-        super().__init__()
-        # Load a pre-trained ResNet50
-        self.base_model = resnet50(weights=ResNet50_Weights.DEFAULT)
-        
-        # --- Adapt for Audio (1-channel Spectrogram) ---
-        # Original 'conv1' expects 3-channel (RGB) images.
-        # We replace it with a new layer that accepts 1-channel.
-        
-        original_conv1 = self.base_model.conv1
-        self.base_model.conv1 = nn.Conv2d(
-            1, # 1 input channel (spectrogram)
-            original_conv1.out_channels,
-            kernel_size=original_conv1.kernel_size,
-            stride=original_conv1.stride,
-            padding=original_conv1.padding,
-            bias=original_conv1.bias
-        )
-        # Initialize the new layer's weights by averaging the old ones
-        self.base_model.conv1.weight.data = original_conv1.weight.data.mean(dim=1, keepdim=True)
-
-        # --- Adapt the Classifier Head ---
-        # Replace the final FC layer (1000 classes) with our 2-class output
-        num_features = self.base_model.fc.in_features
-        self.base_model.fc = nn.Linear(num_features, num_labels)
-
-    def forward(self, x):
-        # Add a channel dimension if it's missing: (B, C, H, W)
-        if x.dim() == 3:
-            x = x.unsqueeze(1)
-        return self.base_model(x)
-
-# --- 2. Load the Model ---
-model_name = "Custom Audio ResNet50 (Untrained)"
-model_path_for_labels = "./model" # Path to your OLD 97% model
+# Initialize all components outside the try block
+model = None
+processor = None
+id2label = {}
+label2id = {}
 
 try:
-    print(f"Loading new ResNet50 model for GRAD-CAM: {model_name}")
+    print(f"Loading PANNs model: {model_name}")
     
-    # Load the labels ("coughing", "sneezing") from your *old* model's config
-    config = AutoConfig.from_pretrained(model_path_for_labels)
-    id2label = config.id2label
+    # 1. 'labels' is already the list we imported from config.
     
-    # Create our new ResNet50 model
-    model = AudioResNet50(num_labels=len(id2label))
+    # 2. Create the id2label and label2id mappings
+    #    We use the imported 'labels' list directly
+    id2label = {i: label for i, label in enumerate(labels)}
+    label2id = {label: i for i, label in enumerate(labels)}
+
+    # 3. Create the PANNs model
+    # FIX: Cnn14() requires configuration parameters when instantiated directly.
+    # We supply the default AudioSet configuration parameters here.
+    model = Cnn14(
+        sample_rate=32000, 
+        window_size=1024, 
+        hop_size=320, 
+        mel_bins=64, 
+        fmin=50, 
+        fmax=14000, 
+        classes_num=527
+    )
     
-    processor = None 
+    processor = None # PANNs doesn't use a 'processor'
     model.eval()
-    print("ResNet50 model loaded successfully.")
-    print(f"Loaded labels: {list(id2label.values())}")
+    
+    print("PANNs Cnn14 model loaded successfully.")
+    print(f"Loaded {len(id2label)} AudioSet labels.")
 
 except Exception as e:
-    print(f"Error loading model: {e}")
-    processor = None
+    print(f"Error loading PANNs model: {e}")
+    # Reset to failed state
     model = None
+    processor = None
     id2label = {}
+    label2id = {}
 
 def get_model_components():
-    """Returns the loaded model, processor, and labels."""
-    return model, processor, id2label
+    """Returns the loaded model, processor, and label mappings."""
+    # Returns 4 components for general compatibility
+    return model, processor, id2label, label2id
