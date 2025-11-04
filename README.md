@@ -1,116 +1,464 @@
-# Interpretable Audio AI Diagnostics
-## Project Title:
+# Audio Classification with Explainable AI (XAI)
 
-Beyond the Black Box: A Case Study in Interpretable Audio AI for Clinical Diagnostics
+## Beyond the Black Box: Interpretable Audio Classification for Clinical Applications
 
-## Primary Domains:
+A full-stack web application that combines state-of-the-art audio classification with explainable AI visualization, making deep learning model decisions transparent and verifiable for clinical and research applications.
 
-- Healthcare: The primary application domain.
+---
 
-- Audio: The core data modality.
+## 🎯 Project Overview
 
-- Explainable AI (XAI): The core methodology and novelty.
+### The Problem
 
-## The Case Study (Problem Statement):
+Deep learning models can detect sounds and classify audio events with remarkable accuracy. However, they operate as "black boxes" - outputting predictions without explaining their reasoning. In critical domains like healthcare (e.g., detecting disease from coughs or vocal patterns), this lack of interpretability prevents adoption. A clinician cannot trust an AI that simply says "Disease Detected (95%)" without justification.
 
-### The Problem: 
+### Our Solution
 
-Deep learning models can now detect diseases from audio (e.g., coughs, vocal tremors) with high accuracy. However, they are "black boxes." A doctor will not trust an AI that just outputs "Diseased (95%)" without a justification. This lack of trust and interpretability is the single biggest barrier to adopting these powerful tools in a clinical setting.
+We've built a prototype system that not only classifies audio with high accuracy but also **explains why** it made each decision through:
 
-### Our Case: 
+1. **Visual Grad-CAM Heatmaps**: Overlays on the audio spectrogram highlighting exactly which time-frequency regions influenced the model's prediction
+2. **SOTA Classification**: Real-time audio event detection using PANNs CNN14, trained on 527 AudioSet categories
+3. **Interactive Web Interface**: Professional UI for uploading audio, viewing predictions, and exploring explanations
 
-Can we build a prototype system that not only classifies audio with State-of-the-Art (SOTA) accuracy but also explains why it made its decision in a way that is verifiable and easy for a human to understand?
+---
 
-## Our Proposed Solution:
+## 🏗️ Architecture
 
-We are building a full-stack web application that serves as an interpretable diagnostic aid.
+### Technology Stack
 
-A user (like a doctor or researcher) can upload an audio file. Our system will then:
+#### Backend (FastAPI + PyTorch)
+- **FastAPI**: High-performance, asynchronous Python web framework for serving ML models
+- **PyTorch**: Deep learning framework for model inference
+- **PANNs (CNN14)**: Pre-trained Convolutional Neural Network from PANNs (Pretrained Audio Neural Networks) library
+- **librosa**: Industry-standard audio processing library
+- **pytorch-grad-cam**: Gradient-weighted Class Activation Mapping for explainability
 
-1. Analyze the audio using a SOTA Transformer model.
+#### Frontend (Next.js + TypeScript)
+- **Next.js 14**: Modern React framework with App Router
+- **TypeScript**: Type-safe development
+- **Axios**: HTTP client for API communication
+- **Tailwind CSS**: Utility-first styling
 
-2. Predict the most likely sound event (e.g., "Cough," "Speech," "Wheezing").
+### Model: PANNs CNN14
 
-3. Explain its prediction by providing two outputs:
+- **Architecture**: Convolutional Neural Network with 6 conv blocks
+- **Training Data**: AudioSet (2M+ audio clips, 527 sound event classes)
+- **Performance**: mAP = 0.431 on AudioSet evaluation
+- **Input**: 10-second audio clips at 32kHz sample rate
+- **Output**: Multi-label classification across 527 categories
 
-    - A Visual Heatmap (XAI): An overlay on the audio's spectrogram that visually highlights exactly which parts of the sound (in time and frequency) the model "listened" to.
+---
 
-    - A Plain-Language Summary: An auto-generated sentence that translates the complex heatmap into a simple, human-readable explanation (e.g., "The model focused on a high-frequency event at the beginning of the clip.").
+## 🔬 How It Works
 
-This solves the "black box" problem by making the AI's reasoning transparent.
+### 1. Audio Upload & Preprocessing
+```
+User uploads audio file (.wav, .mp3, .ogg, .flac)
+         ↓
+Backend receives file via FastAPI endpoint
+         ↓
+librosa loads and resamples to 32kHz
+         ↓
+Audio fixed to 10-second duration
+         ↓
+Mel spectrogram generated (64 mel bins)
+```
 
-## Technology Stack:
+### 2. Model Inference
+```
+Waveform tensor → PANNs CNN14 Model
+         ↓
+Forward pass through 6 convolutional blocks
+         ↓
+Global pooling + Fully connected layer
+         ↓
+Sigmoid activation → 527 class probabilities
+         ↓
+Top 5 predictions extracted
+```
 
-- Backend: FastAPI (Python)
+### 3. Explainable AI (Grad-CAM)
+```
+Target class identified (highest probability)
+         ↓
+Grad-CAM initialized on conv_block6 (final conv layer)
+         ↓
+Gradients computed w.r.t. target class
+         ↓
+Feature maps weighted by gradients
+         ↓
+Heatmap generated showing influential regions
+         ↓
+Heatmap overlaid on mel spectrogram
+         ↓
+Base64-encoded PNG returned to frontend
+```
 
-    - Why: High-performance, asynchronous, and perfect for serving ML models. Easy to create API endpoints.
+### 4. Results Display
+```
+Frontend receives:
+  - Top 5 predictions with probabilities
+  - Grad-CAM heatmap (base64 image)
+  - Processing metadata
+         ↓
+React state updates → UI renders results
+         ↓
+User sees:
+  - Classification rankings with confidence bars
+  - Audio player for playback
+  - Grad-CAM visualization with interpretation guide
+  - Analysis metadata
+```
 
-- Frontend: Next.js (React / TypeScript)
+---
 
-    - Why: Modern, fast, and easy to build a professional-looking user interface.
+## 📁 Project Structure
 
-- AI Model: Audio Spectrogram Transformer (AST) from Hugging Face (MIT/ast-finetuned-audioset-10-10-0.4593).
+```
+.
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI application & endpoints
+│   │   ├── model_loader.py      # Centralized model loading & caching
+│   │   ├── processing.py        # Audio preprocessing & inference
+│   │   └── xai.py               # Grad-CAM visualization generation
+│   └── requirements.txt         # Python dependencies
+│
+├── frontend/
+│   ├── src/
+│   │   └── app/
+│   │       ├── page.tsx         # Main UI component
+│   │       ├── layout.tsx       # App layout
+│   │       └── globals.css      # Global styles
+│   ├── package.json             # Node dependencies
+│   └── next.config.js           # Next.js configuration
+│
+└── README.md
+```
 
-    - Why: This is a SOTA model pre-trained by MIT researchers on AudioSet, a massive dataset with 527 sound classes. We don't need to train it; we are using it for inference. Its attention mechanism is the key to our XAI.
+---
 
-- Audio Processing: librosa (Python)
+## 🚀 Getting Started
 
-    - Why: The industry standard for loading, resampling, and converting audio into spectrograms.
+### Prerequisites
 
-- Plotting (for XAI): matplotlib & numpy
+- **Python 3.8+** (3.10 recommended)
+- **Node.js 18+** (for Next.js)
+- **Git** (for cloning)
 
-    - Why: To generate the heatmap image from the model's attention weights.
+### Backend Setup
 
-## High-Level Architecture
+1. **Clone the repository**
+```bash
+git clone <repository-url>
+cd <project-directory>
+```
 
-1. Frontend (Next.js @ localhost:3000): User uploads a .wav file. axios sends this file via a POST request to our backend.
+2. **Create Python virtual environment**
+```bash
+cd backend
+python -m venv venv
 
-2. Backend (FastAPI @ localhost:8000):
+# Activate virtual environment
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+```
 
-    - The /analyze_audio endpoint receives the file.
+3. **Install dependencies**
+```bash
+pip install -r requirements.txt
+```
 
-    - librosa loads and resamples the audio to 16kHz.
+4. **Start the FastAPI server**
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-    - The ASTFeatureExtractor (processor) converts the audio into a Mel spectrogram.
+The backend will be available at `http://localhost:8000`
 
-    - The ASTForAudioClassification (model) runs inference, outputting logits (the prediction) and attentions (the XAI data).
+**API Documentation**: Visit `http://localhost:8000/docs` for interactive Swagger UI
 
-3. XAI Module (xai.py):
+### Frontend Setup
 
-    - This is our custom logic. It takes the attentions tensor from the model.
+1. **Navigate to frontend directory**
+```bash
+cd frontend
+```
 
-    - It averages the attention heads of the final layer to get a 12x12 attention grid.
+2. **Install dependencies**
+```bash
+npm install
+# or
+yarn install
+```
 
-    - It uses matplotlib to overlay this small grid as a heatmap on the full-resolution spectrogram.
+3. **Start the development server**
+```bash
+npm run dev
+# or
+yarn dev
+```
 
-    - It analyzes the "hottest" part of the grid to generate the English explanation.
+The frontend will be available at `http://localhost:3000`
 
-4. Response: The backend sends a JSON object back to the frontend containing:
+---
 
-    - The top prediction (e.g., "Cough").
+## 🎬 Usage
 
-    - The confidence score.
+1. **Open the application** in your browser at `http://localhost:3000`
 
-    - The heatmap image (as a base64 string).
+2. **Upload an audio file** by clicking the file input or dragging and dropping
 
-    - The plain-language explanation.
+3. **Click "Analyze Audio"** to start the analysis
 
-5. Frontend (Again): React state updates, and the results are dynamically displayed to the user.
+4. **View results**:
+   - **Top 5 Predictions**: See the most likely sound categories with confidence scores
+   - **Audio Player**: Listen to your uploaded audio
+   - **Grad-CAM Heatmap**: Visual explanation showing which spectrogram regions influenced the prediction
+   - **Interpretation Guide**: Understand how to read the heatmap
 
-## Key Features (Deliverables)
+---
 
-- File Upload Interface: A clean web page to upload audio files.
+## 🧪 Key Components Explained
 
-- SOTA Classification: Accurate, real-time audio classification using a Transformer model.
+### Backend Modules
 
-- Visual XAI Heatmap: A spectrogram visualization showing the model's "focus."
+#### `model_loader.py`
+**Purpose**: Centralized model management with caching
 
-- Textual XAI Summary: A simple, auto-generated sentence explaining the model's reasoning.
+**Key Features**:
+- Lazy loading: Model loads on first request
+- Automatic checkpoint download from HuggingFace
+- Device management (CPU/GPU)
+- Label mapping (527 AudioSet classes)
+- Configuration management
 
-- RESTful API: A well-defined FastAPI backend that separates the AI logic from the UI.
+**Key Functions**:
+- `get_model()`: Returns cached model instance
+- `get_labels()`: Returns AudioSet label list
+- `get_model_config()`: Returns model hyperparameters
 
-## What We Are Not Doing (Project Scope)
+#### `processing.py`
+**Purpose**: Audio preprocessing and inference
 
-- We are NOT training a model. Training this model takes weeks. We are engineers, not data scientists for this project. Our job is to use the SOTA model and build a novel, value-added application around it.
+**Key Features**:
+- Audio loading and resampling to 32kHz
+- Mel spectrogram generation (64 bins, 1024 FFT, 320 hop)
+- Waveform tensor preparation for model
+- Prediction formatting (top-k results)
 
-- We are NOT building a new dataset. We will use 2-3 sample .wav files (e.g., a cough, our voice) for the live demo to prove the system works end-to-end.
+**Key Functions**:
+- `preprocess_audio()`: Converts audio file to model-ready tensors
+- `get_full_analysis()`: End-to-end pipeline from file to predictions
+
+#### `xai.py`
+**Purpose**: Explainable AI visualization using Grad-CAM
+
+**Key Features**:
+- Grad-CAM implementation for audio CNNs
+- Target layer: `conv_block6.conv2` (highest-level features)
+- Attention map generation and resizing
+- Heatmap overlay on mel spectrogram
+- Base64 encoding for web transfer
+
+**Key Classes**:
+- `PANNsModelWrapper`: Makes PANNs compatible with pytorch-grad-cam
+- Custom reshape transform for audio feature maps
+
+**Key Functions**:
+- `generate_grad_cam()`: Creates heatmap visualization for target class
+
+#### `main.py`
+**Purpose**: FastAPI application and API endpoints
+
+**Key Endpoints**:
+- `GET /`: Health check
+- `POST /analyze_audio`: Main analysis endpoint
+
+**Features**:
+- CORS middleware for frontend communication
+- Temporary file handling for uploads
+- Comprehensive error handling
+- Resource cleanup (temp files)
+
+### Frontend Component
+
+#### `page.tsx`
+**Purpose**: Main React component for user interface
+
+**Key Features**:
+- File upload with drag-and-drop support
+- Audio playback controls
+- Real-time loading states
+- Error handling and display
+- Responsive design with Tailwind CSS
+
+**State Management**:
+- `file`: Uploaded file object
+- `audioURL`: Object URL for audio playback
+- `result`: API response with predictions and heatmap
+- `isLoading`: Loading state
+- `error`: Error message display
+
+---
+
+## 🔍 Explainable AI: Grad-CAM Explained
+
+### What is Grad-CAM?
+
+**Gradient-weighted Class Activation Mapping (Grad-CAM)** is a technique that produces visual explanations for decisions from CNN-based models.
+
+### How It Works for Audio
+
+1. **Forward Pass**: Audio passes through the model, producing predictions
+2. **Gradient Computation**: Gradients of the target class are computed with respect to the final convolutional layer
+3. **Weight Calculation**: Feature maps are weighted by their importance to the prediction
+4. **Heatmap Generation**: A spatial heatmap shows which regions activated most strongly
+5. **Overlay**: The heatmap is overlaid on the mel spectrogram for interpretation
+
+### Interpreting the Heatmap
+
+- **Red/Orange regions**: Areas that strongly influenced the prediction
+- **Blue/Cool regions**: Areas with minimal influence
+- **Time axis (horizontal)**: When in the audio the important features occurred
+- **Frequency axis (vertical)**: Which frequency bands were most relevant
+
+**Example**: For a "Cough" classification, you might see red highlights around 1-3kHz during the cough event, showing the model focused on the characteristic frequency content of coughing.
+
+---
+
+## 📊 Model Performance
+
+### PANNs CNN14 Metrics
+- **mAP (mean Average Precision)**: 0.431 on AudioSet
+- **Classes**: 527 sound event categories
+- **Training Data**: ~2 million audio clips from AudioSet
+- **Architecture**: 6 convolutional blocks with batch normalization
+
+### Sample Categories
+- Music (instruments, genres)
+- Human sounds (speech, cough, laughter)
+- Animal sounds (dog bark, bird chirp)
+- Environmental sounds (rain, wind, traffic)
+- Mechanical sounds (engine, tools)
+
+---
+
+## 🔧 Configuration
+
+### Backend Configuration
+Edit constants in `backend/app/model_loader.py`:
+
+```python
+SAMPLE_RATE = 32000      # Audio sample rate (Hz)
+WINDOW_SIZE = 1024       # FFT window size
+HOP_SIZE = 320           # FFT hop length
+MEL_BINS = 64            # Number of mel frequency bins
+FMIN = 0                 # Minimum frequency
+FMAX = 16000             # Maximum frequency (Nyquist at 32kHz)
+```
+
+### Frontend Configuration
+Edit `frontend/src/app/page.tsx`:
+
+```typescript
+// Change backend URL (line 53)
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+```
+
+---
+
+## 🎓 Educational Value
+
+This project demonstrates:
+
+1. **Full-Stack ML Engineering**: Integration of deep learning with web technologies
+2. **Production ML Patterns**: Model loading, caching, error handling, API design
+3. **Explainable AI**: Practical XAI implementation for audio domain
+4. **Audio Signal Processing**: Spectrograms, mel-frequency analysis
+5. **Modern Web Development**: React, TypeScript, async/await patterns
+6. **API Design**: RESTful endpoints, file uploads, base64 encoding
+
+---
+
+## 🚧 Known Limitations
+
+1. **Fixed Audio Length**: Audio is truncated/padded to 10 seconds
+2. **Single File Processing**: No batch upload support
+3. **No Authentication**: Open API without user management
+4. **Limited Error Recovery**: Some edge cases may not be handled gracefully
+5. **No Model Comparison**: Only PANNs CNN14 available (not AST as originally planned)
+
+---
+
+## 🔮 Future Enhancements
+
+- [ ] **Multi-Model Support**: Add AST (Audio Spectrogram Transformer) for comparison
+- [ ] **Batch Processing**: Upload and analyze multiple files
+- [ ] **User Authentication**: Secure access with login system
+- [ ] **Database Integration**: Store analysis history
+- [ ] **Export Results**: Download reports as PDF/CSV
+- [ ] **Advanced XAI**: Add attention rollout for Transformer models
+- [ ] **Real-Time Analysis**: Record audio directly in browser
+- [ ] **Medical Fine-Tuning**: Specialize for clinical audio (coughs, breathing)
+- [ ] **Model Confidence Calibration**: Improve probability estimates
+- [ ] **Audio Augmentation**: Show how noise affects predictions
+
+---
+
+## 📚 References
+
+### Papers
+- Kong et al. (2020). "PANNs: Large-Scale Pretrained Audio Neural Networks for Audio Pattern Recognition"
+- Selvaraju et al. (2017). "Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization"
+- Gemmeke et al. (2017). "Audio Set: An ontology and human-labeled dataset for audio events"
+
+### Libraries
+- [PANNs Inference](https://github.com/qiuqiangkong/panns_inference)
+- [PyTorch Grad-CAM](https://github.com/jacobgil/pytorch-grad-cam)
+- [librosa](https://librosa.org/)
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [Next.js](https://nextjs.org/)
+
+---
+
+## 🤝 Contributing
+
+This is an educational project. Suggestions and improvements are welcome!
+
+**Areas for contribution**:
+- Additional XAI methods (LIME, SHAP)
+- Model optimization (quantization, ONNX)
+- UI/UX improvements
+- Testing framework
+- Docker containerization
+- Documentation enhancements
+
+---
+
+## 📄 License
+
+This project is for educational purposes. Model weights are subject to their respective licenses (PANNs uses Apache 2.0).
+
+---
+
+## 👥 Authors
+
+Built as a case study in Interpretable AI for Audio Classification.
+
+**Contact**: [Your contact information]
+
+---
+
+## 🙏 Acknowledgments
+
+- **Kong et al.** for the PANNs architecture and pretrained weights
+- **MIT AudioSet** for the comprehensive sound event dataset
+- **Hugging Face** community for model hosting infrastructure
+- **pytorch-grad-cam** maintainers for the excellent XAI library
+
+---
+
+**Note**: This README reflects the current implementation using PANNs CNN14. The original project proposal mentioned AST (Audio Spectrogram Transformer), but the actual implementation uses PANNs for better compatibility and performance.
