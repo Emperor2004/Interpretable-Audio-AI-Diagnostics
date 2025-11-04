@@ -52,63 +52,20 @@ We've built a prototype system that not only classifies audio with high accuracy
 ## 🔬 How It Works
 
 ### 1. Audio Upload & Preprocessing
-```
-User uploads audio file (.wav, .mp3, .ogg, .flac)
-         ↓
-Backend receives file via FastAPI endpoint
-         ↓
-librosa loads and resamples to 32kHz
-         ↓
-Audio fixed to 10-second duration
-         ↓
-Mel spectrogram generated (64 mel bins)
-```
+<img width="1032" height="612" alt="Audio Processing Funnel Transparent" src="https://github.com/user-attachments/assets/6f0b45e4-4192-4aeb-bb15-e8cfb5d11842" />
+
 
 ### 2. Model Inference
-```
-Waveform tensor → PANNs CNN14 Model
-         ↓
-Forward pass through 6 convolutional blocks
-         ↓
-Global pooling + Fully connected layer
-         ↓
-Sigmoid activation → 527 class probabilities
-         ↓
-Top 5 predictions extracted
-```
+<img width="708" height="648" alt="Model Inference" src="https://github.com/user-attachments/assets/6b073a91-be43-4459-b743-4be9cf4c2837" />
+
 
 ### 3. Explainable AI (Grad-CAM)
-```
-Target class identified (highest probability)
-         ↓
-Grad-CAM initialized on conv_block6 (final conv layer)
-         ↓
-Gradients computed w.r.t. target class
-         ↓
-Feature maps weighted by gradients
-         ↓
-Heatmap generated showing influential regions
-         ↓
-Heatmap overlaid on mel spectrogram
-         ↓
-Base64-encoded PNG returned to frontend
-```
+<img width="1320" height="684" alt="Grad Cam  Process" src="https://github.com/user-attachments/assets/78e274fb-6968-42d2-967e-8fbaa9a84d8e" />
+
 
 ### 4. Results Display
-```
-Frontend receives:
-  - Top 5 predictions with probabilities
-  - Grad-CAM heatmap (base64 image)
-  - Processing metadata
-         ↓
-React state updates → UI renders results
-         ↓
-User sees:
-  - Classification rankings with confidence bars
-  - Audio player for playback
-  - Grad-CAM visualization with interpretation guide
-  - Analysis metadata
-```
+<img width="828" height="684" alt="Frontend" src="https://github.com/user-attachments/assets/5d4b424e-73d6-47bd-a23f-8b21cd9bb8c5" />
+
 
 ---
 
