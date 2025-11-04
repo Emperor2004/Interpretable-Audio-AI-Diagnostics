@@ -1,3 +1,5 @@
+// frontend/src/app/page.tsx
+
 'use client';
 
 import { useState, ChangeEvent, FormEvent } from 'react';

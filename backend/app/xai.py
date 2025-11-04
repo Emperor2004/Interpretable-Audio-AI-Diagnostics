@@ -1,3 +1,5 @@
+# backend/app/xai.py
+
 """
 xai.py - Explainable AI (Grad-CAM) visualization
 This module generates Grad-CAM visualizations for PANNs predictions.

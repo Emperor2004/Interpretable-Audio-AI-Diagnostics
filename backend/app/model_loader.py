@@ -1,3 +1,5 @@
+# backend/app/model_loader.py
+
 """
 model_loader.py - Centralized model loading and management
 This module handles all PANNs model loading, caching, and configuration.
